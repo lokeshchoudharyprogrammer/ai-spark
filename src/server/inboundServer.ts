@@ -46,6 +46,12 @@ export function startInboundServer(createServer: () => Server) {
   // Store active transports mapped by their sessionId
   const transports = new Map<string, SSEServerTransport>();
 
+  app.head('/sse', (req, res) => {
+    // Gemini sends a HEAD request to check if the server is reachable.
+    // If we let it hit the GET handler, the SSE stream stays open and hangs forever.
+    res.status(200).end();
+  });
+
   app.get('/sse', async (req, res) => {
     const host = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
     const transport = new SSEServerTransport(`${host}/messages`, res);
