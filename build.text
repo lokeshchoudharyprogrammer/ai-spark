@@ -1,0 +1,114 @@
+You are an expert full-stack engineer specializing in TypeScript, the Model Context Protocol (MCP), and Supabase.
+
+Build a production-ready MCP server for a To-Do management system backed by Supabase (PostgreSQL), featuring dynamic webhook creation/management and event dispatching.
+
+---
+
+### 1. Technology Stack & Dependencies
+- Language: TypeScript (Node.js >= 18)
+- MCP SDK: `@modelcontextprotocol/sdk`
+- Schema Validation: `zod`
+- Supabase Client: `@supabase/supabase-js`
+- HTTP Server: `express` or `hono` (for inbound webhook ingestion and health checks)
+- HTTP Client & Security: Native `fetch`, Node `crypto` for HMAC-SHA256 signature generation/verification
+- Transport: stdio for MCP integration, with an optional lightweight HTTP server on a configurable port for webhook ingestion
+
+---
+
+### 2. Database Schema (Supabase SQL)
+Provide the full SQL migration script to run in the Supabase SQL Editor:
+
+1. `todos` table:
+   - `id`: `UUID PRIMARY KEY DEFAULT gen_random_uuid()`
+   - `title`: `TEXT NOT NULL`
+   - `description`: `TEXT`
+   - `status`: `TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'in_progress', 'completed', 'cancelled'))`
+   - `priority`: `TEXT NOT NULL DEFAULT 'medium' CHECK (priority IN ('low', 'medium', 'high', 'urgent'))`
+   - `due_date`: `TIMESTAMPTZ`
+   - `created_at`: `TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL`
+   - `updated_at`: `TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL`
+
+2. `webhooks` table (to register and persist webhook destinations dynamically):
+   - `id`: `UUID PRIMARY KEY DEFAULT gen_random_uuid()`
+   - `url`: `TEXT NOT NULL`
+   - `secret`: `TEXT NOT NULL`
+   - `events`: `TEXT[] NOT NULL DEFAULT ARRAY['todo.created', 'todo.updated', 'todo.deleted']`
+   - `is_active`: `BOOLEAN NOT NULL DEFAULT true`
+   - `created_at`: `TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL`
+
+3. Triggers & Indexes:
+   - Automatic `updated_at` trigger on the `todos` table.
+   - Indexes on `todos(status)`, `todos(priority)`, `todos(due_date)`, and `webhooks(is_active)`.
+
+---
+
+### 3. MCP Tools Specification
+Implement the following tools using `@modelcontextprotocol/sdk`:
+
+#### To-Do Operations:
+1. `create_todo`:
+   - Inputs: `title` (string), `description` (optional string), `priority` (optional enum: low/medium/high/urgent), `due_date` (optional ISO 8601 string).
+   - Action: Inserts record into Supabase and triggers the webhook dispatcher for event `todo.created`.
+2. `list_todos`:
+   - Inputs: `status` (optional), `priority` (optional), `search` (optional keyword filter), `limit` (optional number).
+   - Action: Fetches matching tasks sorted by `created_at DESC`.
+3. `get_todo`:
+   - Inputs: `id` (UUID).
+   - Action: Retrieves task details or returns not found.
+4. `update_todo`:
+   - Inputs: `id` (UUID), `title`, `description`, `status`, `priority`, `due_date`.
+   - Action: Updates record in Supabase and triggers webhook dispatcher for event `todo.updated`.
+5. `delete_todo`:
+   - Inputs: `id` (UUID).
+   - Action: Removes record from Supabase and triggers webhook dispatcher for event `todo.deleted`.
+
+#### Webhook Management Operations:
+6. `create_webhook`:
+   - Inputs:
+     - `url` (string, valid HTTPS URL)
+     - `secret` (optional string; generate a secure random 32-character hex secret if omitted)
+     - `events` (optional string array, e.g., `["todo.created", "todo.updated", "todo.deleted"]`)
+   - Action: Persists the new webhook target in the `webhooks` table. Returns the registered webhook record and the shared secret for verification.
+7. `list_webhooks`:
+   - Inputs: `include_inactive` (optional boolean, default false).
+   - Action: Lists all registered webhooks.
+8. `delete_webhook`:
+   - Inputs: `id` (UUID).
+   - Action: Removes the webhook entry from the database.
+
+---
+
+### 4. Webhook Engine Implementation
+1. **Outbound Dispatcher**:
+   - Query all active webhooks from the `webhooks` table matching the emitted event.
+   - Dispatch JSON payload:
+     ```json
+     {
+       "event": "todo.created",
+       "timestamp": "2026-09-18T22:35:00.000Z",
+       "data": { ...todo_fields }
+     }
+     ```
+   - Compute HMAC-SHA256 signature using the webhook's `secret` and attach it in the header `X-Webhook-Signature`.
+   - Non-blocking execution with structured failure logging.
+
+2. **Inbound Webhook Receiver Endpoint**:
+   - Provide an HTTP endpoint (`POST /webhooks/inbound`) that accepts task creation or status updates from external systems, verifies incoming signatures, and inserts or updates records via the Supabase client.
+
+3. **Supabase Database Webhooks (Native alternative)**:
+   - Include documented SQL/dashboard instructions for setting up native Supabase Database Webhooks (via `pg_net`) as an optional direct database trigger.
+
+---
+
+### 5. Project Deliverables
+Provide clean, working files:
+- `package.json`
+- `tsconfig.json`
+- `src/db/supabase.ts` (Supabase client setup)
+- `src/services/webhookService.ts` (Webhook persistence, HMAC generation, and HTTP dispatch)
+- `src/server/inboundServer.ts` (Inbound webhook HTTP listener)
+- `src/tools/todoTools.ts` (To-Do tool definitions and handlers)
+- `src/tools/webhookTools.ts` (Webhook creation and management handlers)
+- `src/index.ts` (MCP server startup and tool registration)
+- `.env.example`
+- `README.md` (Setup guide, SQL migration instructions, and MCP client config for Claude Desktop / Cursor)
