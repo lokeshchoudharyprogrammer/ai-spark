@@ -9,8 +9,13 @@ export function startInboundServer(createServer: () => Server) {
   const app = express();
   const PORT = process.env.PORT || 3000;
 
-  // Enable CORS for all routes so browser-based clients (like Gemini) can connect
-  app.use(cors());
+  // Enable CORS with credentials for Gemini
+  app.use(cors({
+    origin: function (origin, callback) {
+      callback(null, origin || '*');
+    },
+    credentials: true
+  }));
 
   // Simple health check endpoint for pings
   app.get('/health', (req, res) => {
@@ -22,8 +27,8 @@ export function startInboundServer(createServer: () => Server) {
   const transports = new Map<string, SSEServerTransport>();
 
   app.get('/sse', async (req, res) => {
-    console.error("New SSE connection established");
-    const transport = new SSEServerTransport("/messages", res);
+    const host = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+    const transport = new SSEServerTransport(`${host}/messages`, res);
     
     // Create a new MCP server instance dedicated to this client connection
     const mcpServer = createServer();
