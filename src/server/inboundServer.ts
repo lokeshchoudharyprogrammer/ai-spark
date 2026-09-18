@@ -6,10 +6,6 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 
 export function startInboundServer(mcpServer: Server) {
   const app = express();
-  
-  // We need the raw body for signature verification if we were strictly enforcing it.
-  app.use(express.json());
-
   const PORT = process.env.PORT || 3000;
 
   // Simple health check endpoint for pings
@@ -18,6 +14,8 @@ export function startInboundServer(mcpServer: Server) {
   });
 
   // --- MCP SSE Endpoints ---
+  // IMPORTANT: We do NOT use global express.json() because SSEServerTransport 
+  // needs to read the raw request stream directly.
   let transport: SSEServerTransport | null = null;
 
   app.get('/sse', async (req, res) => {
@@ -28,7 +26,6 @@ export function startInboundServer(mcpServer: Server) {
 
   app.post('/messages', async (req, res) => {
     if (!transport) {
-      // Return 400 with Express JSON instead of send to avoid TS type issues
       res.status(400).json({ error: "No active SSE connection" });
       return;
     }
@@ -36,7 +33,8 @@ export function startInboundServer(mcpServer: Server) {
   });
   // -------------------------
 
-  app.post('/webhooks/inbound', async (req, res) => {
+  // Apply express.json() ONLY to the webhook route where it's needed
+  app.post('/webhooks/inbound', express.json(), async (req, res) => {
     try {
       const payload = req.body;
       
