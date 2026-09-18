@@ -48,8 +48,19 @@ export function startInboundServer(createServer: () => Server) {
 
   app.head('/sse', (req, res) => {
     // Gemini sends a HEAD request to check if the server is reachable.
-    // If we let it hit the GET handler, the SSE stream stays open and hangs forever.
     res.status(200).end();
+  });
+
+  // Log POST /sse body for debugging Gemini
+  app.post('/sse', express.json(), (req, res) => {
+    console.error("[GEMINI POST /sse BODY]:", req.body);
+    requestLogs.push({
+      time: new Date().toISOString(),
+      method: "POST_BODY",
+      url: "/sse",
+      body: req.body
+    });
+    res.status(404).json({ error: "Debug mode: logged your post body" });
   });
 
   app.get('/sse', async (req, res) => {
