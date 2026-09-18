@@ -30,9 +30,6 @@ const server = new Server(
   }
 );
 
-// Start optional inbound webhook listener in background
-startInboundServer();
-
 // Register tools list
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   return {
@@ -75,13 +72,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 });
 
-async function main() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  console.error("Supabase Todo MCP server running on stdio");
-}
+// Start the express server and pass the MCP Server into it so it can attach SSE endpoints
+startInboundServer(server);
 
-main().catch((error) => {
-  console.error("Server error:", error);
-  process.exit(1);
-});
+// If we are NOT running on Render, also attach stdio for local terminal usage
+if (!process.env.RENDER) {
+  const transport = new StdioServerTransport();
+  server.connect(transport).then(() => {
+    console.error("Supabase Todo MCP server running on stdio");
+  });
+}

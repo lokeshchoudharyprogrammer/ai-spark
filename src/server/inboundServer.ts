@@ -1,12 +1,13 @@
 import express from 'express';
 import crypto from 'crypto';
 import { supabase } from '../db/supabase.js';
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 
-export function startInboundServer() {
+export function startInboundServer(mcpServer: Server) {
   const app = express();
   
   // We need the raw body for signature verification if we were strictly enforcing it.
-  // For simplicity, we use express.json() but a real production app might use a raw buffer.
   app.use(express.json());
 
   const PORT = process.env.PORT || 3000;
@@ -16,12 +17,27 @@ export function startInboundServer() {
     res.status(200).send('OK');
   });
 
+  // --- MCP SSE Endpoints ---
+  let transport: SSEServerTransport | null = null;
+
+  app.get('/sse', async (req, res) => {
+    console.error("New SSE connection established");
+    transport = new SSEServerTransport("/messages", res);
+    await mcpServer.connect(transport);
+  });
+
+  app.post('/messages', async (req, res) => {
+    if (!transport) {
+      // Return 400 with Express JSON instead of send to avoid TS type issues
+      res.status(400).json({ error: "No active SSE connection" });
+      return;
+    }
+    await transport.handlePostMessage(req, res);
+  });
+  // -------------------------
+
   app.post('/webhooks/inbound', async (req, res) => {
     try {
-      // Typically, an inbound webhook should have a shared secret we can verify here.
-      // E.g., const signature = req.headers['x-webhook-signature'];
-      // if (signature !== computedSignature) return res.status(401).send('Unauthorized');
-      
       const payload = req.body;
       
       // Basic example: handle a task status update
@@ -33,7 +49,8 @@ export function startInboundServer() {
           
         if (error) {
           console.error("Failed to update todo from inbound webhook", error);
-          return res.status(500).json({ error: 'Database update failed' });
+          res.status(500).json({ error: 'Database update failed' });
+          return;
         }
       } else if (payload.event === 'external.task_created') {
         const { error } = await supabase
@@ -42,7 +59,8 @@ export function startInboundServer() {
 
         if (error) {
           console.error("Failed to insert todo from inbound webhook", error);
-          return res.status(500).json({ error: 'Database insert failed' });
+          res.status(500).json({ error: 'Database insert failed' });
+          return;
         }
       }
 
@@ -54,7 +72,7 @@ export function startInboundServer() {
   });
 
   app.listen(PORT, () => {
-    console.error(`Inbound webhook server listening on port ${PORT}`);
+    console.error(`Express server listening on port ${PORT}`);
 
     // Cron job: Self-ping every 3 minutes (180,000 ms) to keep the Render free tier awake
     setInterval(() => {
