@@ -1,5 +1,6 @@
 import express from 'express';
 import crypto from 'crypto';
+import cors from 'cors';
 import { supabase } from '../db/supabase.js';
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -7,6 +8,9 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 export function startInboundServer(mcpServer: Server) {
   const app = express();
   const PORT = process.env.PORT || 3000;
+
+  // Enable CORS for all routes so browser-based clients (like Gemini) can connect
+  app.use(cors());
 
   // Simple health check endpoint for pings
   app.get('/health', (req, res) => {
