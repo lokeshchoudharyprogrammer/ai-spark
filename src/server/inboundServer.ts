@@ -11,6 +11,11 @@ export function startInboundServer() {
 
   const PORT = process.env.PORT || 3000;
 
+  // Simple health check endpoint for pings
+  app.get('/health', (req, res) => {
+    res.status(200).send('OK');
+  });
+
   app.post('/webhooks/inbound', async (req, res) => {
     try {
       // Typically, an inbound webhook should have a shared secret we can verify here.
@@ -50,5 +55,17 @@ export function startInboundServer() {
 
   app.listen(PORT, () => {
     console.error(`Inbound webhook server listening on port ${PORT}`);
+
+    // Cron job: Self-ping every 3 minutes (180,000 ms) to keep the Render free tier awake
+    setInterval(() => {
+      // Render automatically sets RENDER_EXTERNAL_URL in the environment
+      const pingUrl = process.env.RENDER_EXTERNAL_URL 
+        ? `${process.env.RENDER_EXTERNAL_URL}/health` 
+        : `http://localhost:${PORT}/health`;
+        
+      fetch(pingUrl).catch(() => {
+        // Silently catch errors so a failed ping doesn't crash the server
+      });
+    }, 3 * 60 * 1000); // 3 minutes
   });
 }
