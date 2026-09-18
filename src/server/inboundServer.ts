@@ -17,6 +17,26 @@ export function startInboundServer(createServer: () => Server) {
     credentials: true
   }));
 
+  const requestLogs: any[] = [];
+  
+  // Log all incoming requests to help debug Gemini
+  app.use((req, res, next) => {
+    const logEntry = {
+      time: new Date().toISOString(),
+      method: req.method,
+      url: req.url,
+      headers: req.headers
+    };
+    requestLogs.push(logEntry);
+    if (requestLogs.length > 50) requestLogs.shift();
+    console.error(`[INCOMING] ${req.method} ${req.url}`);
+    next();
+  });
+
+  app.get('/logs', (req, res) => {
+    res.json(requestLogs);
+  });
+
   // Simple health check endpoint for pings
   app.get('/health', (req, res) => {
     res.status(200).send('OK');
