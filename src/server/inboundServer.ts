@@ -5,7 +5,7 @@ import { supabase } from '../db/supabase.js';
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 
-export function startInboundServer(mcpServer: Server) {
+export function startInboundServer(createServer: () => Server) {
   const app = express();
   const PORT = process.env.PORT || 3000;
 
@@ -18,21 +18,35 @@ export function startInboundServer(mcpServer: Server) {
   });
 
   // --- MCP SSE Endpoints ---
-  // IMPORTANT: We do NOT use global express.json() because SSEServerTransport 
-  // needs to read the raw request stream directly.
-  let transport: SSEServerTransport | null = null;
+  // Store active transports mapped by their sessionId
+  const transports = new Map<string, SSEServerTransport>();
 
   app.get('/sse', async (req, res) => {
     console.error("New SSE connection established");
-    transport = new SSEServerTransport("/messages", res);
+    const transport = new SSEServerTransport("/messages", res);
+    
+    // Create a new MCP server instance dedicated to this client connection
+    const mcpServer = createServer();
     await mcpServer.connect(transport);
+    
+    // Store the transport so we can route POST requests to it
+    transports.set(transport.sessionId, transport);
+    
+    res.on('close', () => {
+      console.error(`SSE connection closed: ${transport.sessionId}`);
+      transports.delete(transport.sessionId);
+    });
   });
 
   app.post('/messages', async (req, res) => {
+    const sessionId = req.query.sessionId as string;
+    const transport = transports.get(sessionId);
+    
     if (!transport) {
-      res.status(400).json({ error: "No active SSE connection" });
+      res.status(404).json({ error: "Session not found or inactive" });
       return;
     }
+    
     await transport.handlePostMessage(req, res);
   });
   // -------------------------
@@ -78,14 +92,11 @@ export function startInboundServer(mcpServer: Server) {
 
     // Cron job: Self-ping every 3 minutes (180,000 ms) to keep the Render free tier awake
     setInterval(() => {
-      // Render automatically sets RENDER_EXTERNAL_URL in the environment
       const pingUrl = process.env.RENDER_EXTERNAL_URL 
         ? `${process.env.RENDER_EXTERNAL_URL}/health` 
         : `http://localhost:${PORT}/health`;
         
-      fetch(pingUrl).catch(() => {
-        // Silently catch errors so a failed ping doesn't crash the server
-      });
+      fetch(pingUrl).catch(() => {});
     }, 3 * 60 * 1000); // 3 minutes
   });
 }
