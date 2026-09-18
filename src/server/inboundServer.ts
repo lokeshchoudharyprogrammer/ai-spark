@@ -3,13 +3,12 @@ import crypto from 'crypto';
 import cors from 'cors';
 import { supabase } from '../db/supabase.js';
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
-export function startInboundServer(createServer: () => Server) {
+export function startInboundServer(createServer: () => any) {
   const app = express();
   const PORT = process.env.PORT || 3000;
 
-  // Enable CORS with credentials for Gemini
   app.use(cors({
     origin: function (origin, callback) {
       callback(null, origin || '*');
@@ -17,84 +16,58 @@ export function startInboundServer(createServer: () => Server) {
     credentials: true
   }));
 
-  const requestLogs: any[] = [];
-  
-  // Log all incoming requests to help debug Gemini
-  app.use((req, res, next) => {
-    const logEntry = {
-      time: new Date().toISOString(),
-      method: req.method,
-      url: req.url,
-      headers: req.headers
-    };
-    requestLogs.push(logEntry);
-    if (requestLogs.length > 50) requestLogs.shift();
-    console.error(`[INCOMING] ${req.method} ${req.url}`);
-    next();
-  });
+  // Enable JSON parsing for ALL routes to support StreamableHTTP POST bodies
+  app.use(express.json());
 
-  app.get('/logs', (req, res) => {
-    res.json(requestLogs);
-  });
-
-  // Simple health check endpoint for pings
   app.get('/health', (req, res) => {
     res.status(200).send('OK');
   });
 
-  // --- MCP SSE Endpoints ---
-  // Store active transports mapped by their sessionId
-  const transports = new Map<string, SSEServerTransport>();
-
   app.head('/sse', (req, res) => {
-    // Gemini sends a HEAD request to check if the server is reachable.
     res.status(200).end();
   });
 
-  // Log POST /sse body for debugging Gemini
-  app.post('/sse', express.json(), (req, res) => {
-    console.error("[GEMINI POST /sse BODY]:", req.body);
-    requestLogs.push({
-      time: new Date().toISOString(),
-      method: "POST_BODY",
-      url: "/sse",
-      body: req.body
-    });
-    res.status(404).json({ error: "Debug mode: logged your post body" });
-  });
+  // Track active stateful transports by session ID
+  const transports = new Map<string, StreamableHTTPServerTransport>();
 
-  app.get('/sse', async (req, res) => {
-    const host = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
-    const transport = new SSEServerTransport(`${host}/messages`, res);
+  const handleMcpRequest = async (req: express.Request, res: express.Response) => {
+    const sessionId = (req.query.sessionId || req.headers['mcp-session-id']) as string;
     
-    // Create a new MCP server instance dedicated to this client connection
-    const mcpServer = createServer();
-    await mcpServer.connect(transport);
+    let transport: StreamableHTTPServerTransport;
     
-    // Store the transport so we can route POST requests to it
-    transports.set(transport.sessionId, transport);
-    
-    res.on('close', () => {
-      console.error(`SSE connection closed: ${transport.sessionId}`);
-      transports.delete(transport.sessionId);
-    });
-  });
-
-  app.post('/messages', async (req, res) => {
-    const sessionId = req.query.sessionId as string;
-    const transport = transports.get(sessionId);
-    
-    if (!transport) {
-      res.status(404).json({ error: "Session not found or inactive" });
-      return;
+    // For new initialization requests
+    if (!sessionId) {
+      transport = new StreamableHTTPServerTransport();
+      const mcpServer = createServer();
+      await mcpServer.connect(transport);
+      
+      // We don't have the generated sessionId until after we start it, but transport.sessionId is available
+      // Actually transport.sessionId is available after construction in stateful mode!
+      if (transport.sessionId) {
+        transports.set(transport.sessionId, transport);
+        transport.onclose = () => {
+          if (transport.sessionId) transports.delete(transport.sessionId);
+        };
+      }
+    } else {
+      // Find existing transport
+      transport = transports.get(sessionId) as StreamableHTTPServerTransport;
+      if (!transport) {
+        res.status(404).json({ error: "Session not found" });
+        return;
+      }
     }
-    
-    await transport.handlePostMessage(req, res);
-  });
-  // -------------------------
 
-  // Apply express.json() ONLY to the webhook route where it's needed
-  app.post('/webhooks/inbound', express.json(), async (req, res) => {
+    // StreamableHTTPServerTransport handles both GET (SSE) and POST (Messages) natively
+    await transport.handleRequest(req as any, res as any, req.body);
+  };
+
+  app.get('/sse', handleMcpRequest);
+  app.post('/sse', handleMcpRequest);
+  app.post('/messages', handleMcpRequest); // Keep this for Cursor if it falls back
+
+  // Webhooks
+  app.post('/webhooks/inbound', async (req, res) => {
     try {
       const payload = req.body;
       
